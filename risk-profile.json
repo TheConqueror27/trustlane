@@ -1,0 +1,95 @@
+{
+  "food": {
+    "name": "Food & Casual Dining",
+    "mean": 185.50,
+    "std": 62.20,
+    "logMean": 5.17,
+    "logStd": 0.32,
+    "sigma1": 247.70,
+    "sigma2": 309.90,
+    "flagThreshold3Sigma": 372.10,
+    "sampleCount": 104520,
+    "merchantTiers": {
+      "tier1_qsr": { "name": "QSR & Street Food", "mean": 120.00, "std": 35.00 },
+      "tier2_cafe": { "name": "Casual Cafe & Diner", "mean": 185.50, "std": 62.20 },
+      "tier3_gourmet": { "name": "Fine Dining & Gourmet", "mean": 450.00, "std": 110.00 }
+    },
+    "source": "Kaggle UPI Fraud Detection & PaySim India Retail Segment",
+    "description": "Quick service restaurant meals, fast food, cafe orders across Indian urban clusters."
+  },
+  "beverage": {
+    "name": "Beverages & Cafe",
+    "mean": 95.00,
+    "std": 28.50,
+    "logMean": 4.51,
+    "logStd": 0.29,
+    "sigma1": 123.50,
+    "sigma2": 152.00,
+    "flagThreshold3Sigma": 180.50,
+    "sampleCount": 76400,
+    "merchantTiers": {
+      "tier1_qsr": { "name": "Tea Stalls & Kiosks", "mean": 45.00, "std": 15.00 },
+      "tier2_cafe": { "name": "Artisan Coffee & Cafe", "mean": 95.00, "std": 28.50 },
+      "tier3_gourmet": { "name": "Specialty Roasteries & Lounges", "mean": 190.00, "std": 45.00 }
+    },
+    "source": "Kaggle UPI Fraud Detection & PaySim India Retail Segment",
+    "description": "Artisan coffee, cold brew, milkshakes, sparkling drinks, and tea."
+  },
+  "groceries": {
+    "name": "Daily Groceries & Essentials",
+    "mean": 420.00,
+    "std": 145.00,
+    "logMean": 5.98,
+    "logStd": 0.35,
+    "sigma1": 565.00,
+    "sigma2": 710.00,
+    "flagThreshold3Sigma": 855.00,
+    "sampleCount": 158900,
+    "merchantTiers": {
+      "tier1_qsr": { "name": "Local Kirana & Produce", "mean": 220.00, "std": 75.00 },
+      "tier2_cafe": { "name": "Supermarket Basket", "mean": 420.00, "std": 145.00 },
+      "tier3_gourmet": { "name": "Organic Gourmet Groceries", "mean": 920.00, "std": 280.00 }
+    },
+    "source": "Kaggle UPI Fraud & PaySim FMCG Segment",
+    "description": "Supermarket baskets, daily staples, fresh produce, and FMCG supplies."
+  },
+  "electronics": {
+    "name": "Consumer Electronics & Gadgets",
+    "mean": 1250.00,
+    "std": 480.00,
+    "logMean": 7.06,
+    "logStd": 0.38,
+    "sigma1": 1730.00,
+    "sigma2": 2210.00,
+    "flagThreshold3Sigma": 2690.00,
+    "sampleCount": 42100,
+    "source": "Kaggle UPI Fraud Detection Dataset",
+    "description": "Wearables, accessories, headphones, smart devices, and peripheral hardware."
+  },
+  "dining_luxury": {
+    "name": "Gourmet & Fine Dining",
+    "mean": 850.00,
+    "std": 220.00,
+    "logMean": 6.71,
+    "logStd": 0.26,
+    "sigma1": 1070.00,
+    "sigma2": 1290.00,
+    "flagThreshold3Sigma": 1510.00,
+    "sampleCount": 31200,
+    "source": "Kaggle Online Payments Transaction Distribution",
+    "description": "Luxury multi-course dining, premium chef specials, and reservations."
+  },
+  "transport": {
+    "name": "Urban Mobility & Transit",
+    "mean": 160.00,
+    "std": 45.00,
+    "logMean": 5.04,
+    "logStd": 0.28,
+    "sigma1": 205.00,
+    "sigma2": 250.00,
+    "flagThreshold3Sigma": 295.00,
+    "sampleCount": 98000,
+    "source": "Kaggle UPI Micro-Transactions Dataset",
+    "description": "Ride hailing, metro smartcard transit, and regional auto payments."
+  }
+}

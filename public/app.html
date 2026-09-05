@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrustLane — Bounded AI Agent Payment Gateway & Trust Layer</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cg transform='rotate(-30 12 12)'%3E%3Ccircle cx='7.3' cy='3.2' r='1.45'/%3E%3Crect x='5.5' y='4.7' width='3.6' height='14.6' rx='1.8'/%3E%3Crect x='14.9' y='4.7' width='3.6' height='14.6' rx='1.8'/%3E%3Ccircle cx='16.7' cy='20.8' r='1.45'/%3E%3C/g%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/app.css">
+  
+  <!-- Razorpay Checkout.js for test mode payments -->
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+</head>
+<body>
+
+  <!-- Top App Navigation & Role Control -->
+  <header class="app-header">
+    <div class="brand-group">
+      <a href="/" class="brand-link">
+        <div class="brand-icon">🛡️</div>
+        <strong>TrustLane</strong>
+      </a>
+      <span class="brand-badge">Buildathon Demo</span>
+      <span class="system-status-pill" id="dbStatusPill" title="TimescaleDB Persistent Storage Status">
+        <span class="pulse-dot"></span> TimescaleDB Active
+      </span>
+      <span class="system-status-pill" style="background: rgba(99, 102, 241, 0.15); border-color: rgba(99, 102, 241, 0.35); color: #a5b4fc;" title="Ed25519 Asymmetric Digital Signatures">
+        🔑 Ed25519 Active
+      </span>
+    </div>
+
+    <!-- Role Switcher for instant judge testing & RBAC enforcement -->
+    <div class="role-bar">
+      <span class="role-label">Role:</span>
+      <select id="roleSelector" class="role-select" onchange="handleRoleSwitch(this.value)">
+        <option value="buyer">Buyer (Set Cap & Shop)</option>
+        <option value="merchant_admin">Merchant Admin (Catalog & Orders)</option>
+        <option value="auditor">Auditor (Compliance & Ledger)</option>
+      </select>
+
+      <div class="user-profile">
+        <div class="user-avatar" id="userAvatar">B</div>
+        <span id="userEmailDisplay">buyer@trustlane.ai</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Real-Time Simulated Menu Ticker & Live Controls Drawer -->
+  <div class="live-menu-ticker-bar">
+    <div class="ticker-left">
+      <span class="live-badge"><span class="blink-dot"></span> REAL-TIME MENU STREAM</span>
+      <span id="liveTickerHeadline" class="ticker-text">Live kitchen feed connected via Server-Sent Events (SSE).</span>
+    </div>
+    <div class="ticker-controls">
+      <button class="btn-ticker-sim" onclick="triggerMenuSimulation('rush_hour_surge')" title="Simulate peak hours with +20% demand surge">🔥 Rush Surge (+20%)</button>
+      <button class="btn-ticker-sim" onclick="triggerMenuSimulation('flash_sale')" title="Simulate 25% discount flash sale on drinks">⚡ Flash Sale (-25%)</button>
+      <button class="btn-ticker-sim" onclick="triggerMenuSimulation('kitchen_stock_drop')" title="Simulate sudden kitchen inventory depletion">📉 Stock Drop</button>
+      <button class="btn-ticker-sim btn-ticker-reset" onclick="triggerMenuSimulation('reset_defaults')" title="Reset catalog to standard base prices">🔄 Reset</button>
+    </div>
+  </div>
+
+  <!-- Role Navigation Tabs -->
+  <nav class="app-nav" id="roleTabs">
+    <button class="tab-btn active" data-tab="agent-tab" id="tabNavAgent">
+      🤖 AI Shopping Agent
+    </button>
+    <button class="tab-btn" data-tab="consent-tab" id="tabNavConsent">
+      ✍️ Consent & Mandate
+    </button>
+    <button class="tab-btn" data-tab="catalog-tab" id="tabNavCatalog">
+      📦 Live Simulated Menu
+    </button>
+    <button class="tab-btn" data-tab="anomaly-tab" id="tabNavAnomaly">
+      📊 Kaggle 3-Sigma Lab
+    </button>
+    <button class="tab-btn" data-tab="security-tab" id="tabNavSecurity">
+      🔒 NPCI Trust & Attack Sim
+    </button>
+    <button class="tab-btn" data-tab="merchant-tab" id="tabNavMerchant" style="display: none;">
+      🏪 Merchant Dashboard
+    </button>
+    <button class="tab-btn" data-tab="audit-tab" id="tabNavAudit">
+      📜 TimescaleDB Audit Ledger
+    </button>
+  </nav>
+
+  <!-- App Main Content Area -->
+  <main class="app-container">
+
+    <!-- Preset Demo Scenarios Bar -->
+    <div class="demo-bar">
+      <div class="demo-title">
+        <span>⚡</span> Fast Demo Presets:
+      </div>
+      <div class="demo-actions">
+        <button class="btn-demo-preset" onclick="runPresetScenario('happy_path')">1. Happy Path (₹300 Cap)</button>
+        <button class="btn-demo-preset" onclick="runPresetScenario('combo_basket')">2. Multi-Item Combo (₹350 Cap)</button>
+        <button class="btn-demo-preset" onclick="runPresetScenario('gate_blocked')">3. Gate Blocked (₹50 Cap)</button>
+        <button class="btn-demo-preset" onclick="runPresetScenario('auto_dispute')">4. Auto-Dispute Trigger</button>
+        <button class="btn-demo-preset" onclick="runPresetScenario('anomaly_flag')">5. Kaggle 3-Sigma Anomaly</button>
+        <button class="btn-demo-preset" onclick="runPresetScenario('out_of_stock')">6. Stock Refusal</button>
+      </div>
+    </div>
+
+    <!-- TAB 1: Multimodal AI Shopping Agent -->
+    <section id="agent-tab" class="tab-content active">
+      <div class="grid-2">
+        
+        <!-- Left: Interactive Chat and Multimodal Inputs -->
+        <div class="agent-chat-container">
+          <div class="agent-messages" id="agentMessageFeed">
+            <div class="msg msg-agent">
+              <span class="msg-mode-tag">🤖 TrustLane Autonomous Agent</span>
+              Hello! I am your AI Shopping Agent bounded by the TrustLane Gate. Order single items or multi-item combos via text, voice, or photo. All proposals are evaluated in real-time against your signed Ed25519 consent mandate and Kaggle statistical risk baselines.
+            </div>
+          </div>
+
+          <!-- Suggested Query Chips -->
+          <div style="padding: 0.5rem 1.25rem; background: rgba(0,0,0,0.3); display: flex; gap: 6px; overflow-x: auto; border-top: 1px solid var(--border-subtle);">
+            <button class="btn-demo-preset" style="font-size: 0.75rem; padding: 2px 8px;" onclick="quickSuggest('Order me a classic veg burger')">🍔 Veg Burger (₹180)</button>
+            <button class="btn-demo-preset" style="font-size: 0.75rem; padding: 2px 8px; border-color: #3b82f6;" onclick="quickSuggest('Build me a lunch combo with a burger and cold brew under 350')">🍱 Lunch Combo (₹320)</button>
+            <button class="btn-demo-preset" style="font-size: 0.75rem; padding: 2px 8px;" onclick="quickSuggest('Order me a gourmet truffle burger')">👑 Truffle Burger (3σ Anomaly)</button>
+            <button class="btn-demo-preset" style="font-size: 0.75rem; padding: 2px 8px;" onclick="quickSuggest('Order me the mystery chef surprise box')">🎁 Mystery Chef Box (Auto-Dispute)</button>
+          </div>
+
+          <!-- Multimodal Input Dock -->
+          <div class="input-dock">
+            <button class="btn-icon" id="btnVoiceInput" title="Voice Input (Speech-to-text)" onclick="toggleVoiceInput()">
+              🎙️
+            </button>
+            <label class="btn-icon" title="Upload menu photo" style="cursor: pointer;">
+              📷
+              <input type="file" id="imageFileInput" accept="image/*" style="display: none;" onchange="handleImageUpload(event)">
+            </label>
+            <input type="text" id="agentTextInput" class="form-input" placeholder="e.g. Build me a lunch combo under 350..." onkeydown="if(event.key==='Enter') sendAgentQuery('text')">
+            <button class="btn btn-primary" onclick="sendAgentQuery('text')">
+              Send →
+            </button>
+          </div>
+        </div>
+
+        <!-- Right: Proposal Inspector & Kaggle 3-Sigma Gaussian Visualizer -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span>🛡️</span> Gate & Risk Checkpoint
+            </div>
+            <span class="status-tag status-neutral" id="orderStatusTag">Idle</span>
+          </div>
+
+          <div id="checkpointBody">
+            <p style="color: var(--text-dim); font-size: 0.88rem; margin-bottom: 1rem;">
+              No active proposal in flight. Ask the agent or click a preset demo scenario above.
+            </p>
+          </div>
+
+          <!-- Interactive Gaussian Bell Curve Display on Gate Screen -->
+          <div id="checkpointCanvasWrapper" style="display: none; margin-top: 1.25rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+              <span style="font-size: 0.75rem; font-weight: 700; color: #94a3b8; text-transform: uppercase;">📊 Kaggle 3-Sigma Distribution:</span>
+              <button class="btn-demo-preset" style="padding: 0.15rem 0.5rem; font-size: 0.75rem;" onclick="switchTab('anomaly-tab')">Open Full Lab →</button>
+            </div>
+            <div class="canvas-container" style="height: 180px; position: relative;">
+              <canvas id="gateGaussianCanvas" style="width: 100%; height: 100%;"></canvas>
+            </div>
+            <div id="kaggleMathHud" style="margin-top: 0.75rem;"></div>
+          </div>
+
+          <!-- Active Consent HUD -->
+          <div style="margin-top: 1.5rem; padding: 1rem; border-radius: 10px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-medium);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+              <span style="font-size: 0.75rem; color: var(--text-dim); text-transform: uppercase; font-weight: 700;">Active Ephemeral Mandate:</span>
+              <button class="btn-demo-preset" style="padding: 0.15rem 0.5rem; font-size: 0.75rem;" onclick="switchTab('consent-tab')">Edit Mandate</button>
+            </div>
+            <div id="activeConsentSummary" style="font-size: 0.88rem; font-weight: 600; color: #93c5fd;">
+              Loading consent status...
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- TAB 2: Consent & Mandate Setup -->
+    <section id="consent-tab" class="tab-content">
+      <div class="card" style="max-width: 640px; margin: 0 auto;">
+        <div class="card-header">
+          <div class="card-title">
+            <span>✍️</span> Register Dual-Key Cryptographic Mandate
+          </div>
+          <span class="brand-badge">Ed25519 Asymmetric</span>
+        </div>
+
+        <p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 1.25rem; line-height: 1.5;">
+          TrustLane solves delegated payment vulnerabilities by generating a digitally signed, nonce-bound mandate with strict merchant binding and velocity limiting.
+        </p>
+
+        <div style="display: flex; flex-direction: column; gap: 1rem;">
+          <div>
+            <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">Maximum Spend Cap (₹ INR)</label>
+            <input type="number" id="consentCapInput" class="form-input" placeholder="e.g. 500" value="500">
+          </div>
+
+          <div>
+            <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">Authorized Merchant</label>
+            <input type="text" id="consentMerchantInput" class="form-input" value="FreshBites Cafe">
+          </div>
+
+          <div class="grid-2" style="gap: 10px;">
+            <div>
+              <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">Mandate TTL</label>
+              <input type="text" class="form-input" value="1 Hour (Auto-Revoke)" disabled style="opacity: 0.7;">
+            </div>
+            <div>
+              <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">Signature Algorithm</label>
+              <input type="text" class="form-input" value="Ed25519 Digital Signature" disabled style="opacity: 0.7;">
+            </div>
+          </div>
+
+          <button class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;" onclick="createConsentRecord()">
+            🛡️ Sign & Grant Ed25519 Mandate
+          </button>
+        </div>
+
+        <div id="consentFeedbackBox" style="margin-top: 1rem; display: none;"></div>
+      </div>
+    </section>
+
+    <!-- TAB 3: Catalog & Live Simulated Menu -->
+    <section id="catalog-tab" class="tab-content">
+      <div class="card-header" style="margin-bottom: 1.2rem;">
+        <div>
+          <div class="card-title">
+            <span>📦</span> Real-Time Dynamic Menu Catalog
+          </div>
+          <p style="font-size: 0.82rem; color: var(--text-dim); margin-top: 4px;">
+            Items dynamically update live in real-time via Server-Sent Events (SSE). Use top ticker controls to simulate peak hours or flash sales.
+          </p>
+        </div>
+        <div id="catalogAdminIndicator" style="font-size: 0.8rem; color: var(--text-dim);">
+          (Viewing as Buyer - Read Only)
+        </div>
+      </div>
+
+      <div class="grid-3" id="catalogGrid">
+        <!-- Catalog cards injected dynamically via JS -->
+      </div>
+    </section>
+
+    <!-- TAB 4: Kaggle 3-Sigma Anomaly Lab & Gaussian Visualizer -->
+    <section id="anomaly-tab" class="tab-content">
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span>📊</span> Kaggle 3-Sigma Anomaly Model
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn-demo-preset" style="padding: 2px 8px; font-size: 0.75rem;" onclick="setVisualizerModel('gaussian')">Gaussian Z</button>
+              <button class="btn-demo-preset" style="padding: 2px 8px; font-size: 0.75rem;" onclick="setVisualizerModel('lognormal')">Log-Normal Z_ln</button>
+            </div>
+          </div>
+
+          <p style="color: var(--text-muted); font-size: 0.88rem; line-height: 1.5; margin-bottom: 1rem;">
+            TrustLane computes statistical Z-scores from empirical payment distributions in India. Under the Empirical Gaussian Rule (99.73%), transactions exceeding <strong>3 Standard Deviations (&gt; 3σ)</strong> represent extreme anomalies (&lt; 0.13% probability).
+          </p>
+
+          <div class="canvas-container" style="height: 240px; position: relative; margin-bottom: 1rem;">
+            <canvas id="labGaussianCanvas" style="width: 100%; height: 100%;"></canvas>
+          </div>
+
+          <div id="labMathHud"></div>
+        </div>
+
+        <!-- Right: Interactive Sandbox Simulator -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <span>🧪</span> Real-Time Kaggle Risk Sandbox
+            </div>
+            <span class="status-tag status-info">Interactive Simulator</span>
+          </div>
+
+          <p style="color: var(--text-muted); font-size: 0.88rem; margin-bottom: 1.25rem;">
+            Test any transaction category and price against the Kaggle empirical model in real time:
+          </p>
+
+          <div style="display: flex; flex-direction: column; gap: 1.25rem;">
+            <div>
+              <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">Transaction Category</label>
+              <select id="sandboxCategorySelect" class="form-input" onchange="handleSandboxCategoryChange(this.value)">
+                <option value="food">Food & Casual Dining (μ = ₹185.50, σ = ₹62.20)</option>
+                <option value="beverage">Beverages & Cafe (μ = ₹95.00, σ = ₹28.50)</option>
+                <option value="groceries">Daily Groceries (μ = ₹420.00, σ = ₹145.00)</option>
+                <option value="electronics">Consumer Electronics (μ = ₹1250.00, σ = ₹480.00)</option>
+                <option value="dining_luxury">Gourmet Dining (μ = ₹850.00, σ = ₹220.00)</option>
+                <option value="transport">Transit & Mobility (μ = ₹160.00, σ = ₹45.00)</option>
+              </select>
+            </div>
+
+            <div>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                <label style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted);">Simulated Amount (₹ INR):</label>
+                <span id="sandboxAmountDisplay" style="font-size: 1.1rem; font-weight: 700; color: #60a5fa;">₹490</span>
+              </div>
+              <input type="range" id="sandboxAmountSlider" min="20" max="2500" step="10" value="490" style="width: 100%; cursor: pointer;" oninput="handleSandboxAmountChange(this.value)">
+            </div>
+
+            <div id="sandboxScoreHud"></div>
+
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-secondary" style="flex: 1;" onclick="setSandboxPreset('food', 180)">Test Normal (₹180)</button>
+              <button class="btn btn-secondary" style="flex: 1;" onclick="setSandboxPreset('food', 490)">Test Anomaly (₹490)</button>
+              <button class="btn btn-secondary" style="flex: 1;" onclick="setSandboxPreset('beverage', 210)">Test Beverage (₹210)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: NPCI Trust & Attack Simulator -->
+    <section id="security-tab" class="tab-content">
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-header">
+          <div class="card-title">
+            <span>🔒</span> NPCI-Grade Payment Trust & Zero-Trust Layer
+          </div>
+          <span class="status-tag status-success">Ed25519 Enforcer Active</span>
+        </div>
+
+        <p style="color: var(--text-muted); font-size: 0.88rem; line-height: 1.5; margin-bottom: 1.25rem;">
+          NPCI's delegated payment trials faced vulnerabilities regarding unverified delegation, mandate replay, and unauthorized client executions. TrustLane eliminates these loopholes:
+        </p>
+
+        <div class="grid-3" style="margin-bottom: 1.5rem;">
+          <div class="security-feature-card">
+            <div class="sec-icon">🔑</div>
+            <h4>Ed25519 Asymmetric Signatures</h4>
+            <p>Signed using server's private key; banks and gateways verify offline using the public key.</p>
+          </div>
+
+          <div class="security-feature-card">
+            <div class="sec-icon">🎫</div>
+            <h4>Cryptographic Gate Tickets</h4>
+            <p>Payment orders strictly require a one-time gate ticket signed with private server secrets.</p>
+          </div>
+
+          <div class="security-feature-card">
+            <div class="sec-icon">🛡️</div>
+            <h4>Anti-Replay Nonce Engine</h4>
+            <p>Consumed tokens and nonces are permanently invalidated to defeat replay attacks.</p>
+          </div>
+
+          <div class="security-feature-card">
+            <div class="sec-icon">⚡</div>
+            <h4>Velocity & Blast-Radius Engine</h4>
+            <p>Limits transaction frequency (max 6/min) and total volume to contain runaway AI agent loops.</p>
+          </div>
+
+          <div class="security-feature-card">
+            <div class="sec-icon">⛓️</div>
+            <h4>SHA-256 Chained Hash Ledger</h4>
+            <p>Every audit log block is linked via cryptographic hash chains, guaranteeing immutable tamper-detection.</p>
+          </div>
+
+          <div class="security-feature-card">
+            <div class="sec-icon">🐘</div>
+            <h4>TimescaleDB Persistence</h4>
+            <p>Hypertables partition audit logs across time-series chunks, persisting transactions across restarts.</p>
+          </div>
+        </div>
+
+        <!-- 🔥 KILLER FEATURE 1: Live Interactive Attack & Hack Simulator -->
+        <div class="attack-sim-dock">
+          <div class="attack-sim-header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 1.2rem;">🎯</span>
+              <strong style="color: #ffffff; font-size: 0.95rem;">Live Security Attack & Exploit Simulator (Judge Demo)</strong>
+            </div>
+            <span class="status-tag status-danger" style="font-size: 0.68rem;">Live Sandbox</span>
+          </div>
+          <p style="font-size: 0.8rem; color: #cbd5e1; margin-bottom: 0.85rem;">
+            Test the zero-trust payment security engine against 4 real-world attack vectors:
+          </p>
+
+          <div class="attack-button-grid">
+            <button class="btn btn-danger" style="font-size: 0.78rem;" onclick="runSimulatedAttack('replay_ticket')">
+              ⚠️ 1. Replay Consumed Ticket
+            </button>
+            <button class="btn btn-danger" style="font-size: 0.78rem;" onclick="runSimulatedAttack('mitm_amount_tamper')">
+              ⚠️ 2. MITM Amount Tampering (10x)
+            </button>
+            <button class="btn btn-danger" style="font-size: 0.78rem;" onclick="runSimulatedAttack('forge_signature')">
+              ⚠️ 3. Forge Ed25519 Signature
+            </button>
+            <button class="btn btn-danger" style="font-size: 0.78rem;" onclick="runSimulatedAttack('velocity_flood')">
+              ⚠️ 4. Velocity DDoS Flood
+            </button>
+          </div>
+
+          <div id="attackResultBox" style="display: none; margin-top: 1rem;"></div>
+        </div>
+
+        <div class="card-header" style="border-top: 1px solid var(--border-medium); padding-top: 1rem; margin-top: 1.25rem;">
+          <div class="card-title" style="font-size: 1rem;">
+            <span>⛓️</span> Cryptographic Ledger Integrity Status
+          </div>
+          <button class="btn btn-primary" onclick="verifyLedgerIntegrity()">🛡️ Verify Entire Hash Chain Now</button>
+        </div>
+        <div id="ledgerVerificationResult" style="margin-top: 0.75rem;"></div>
+      </div>
+    </section>
+
+    <!-- TAB 6: Merchant Dashboard -->
+    <section id="merchant-tab" class="tab-content">
+      <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-header">
+          <div class="card-title">
+            <span>🏪</span> Merchant Order & Dispute Dashboard (FreshBites Cafe)
+          </div>
+          <button class="btn btn-secondary" onclick="loadMerchantOrders()">🔄 Refresh Orders</button>
+        </div>
+
+        <div class="audit-table-wrapper">
+          <table class="audit-table">
+            <thead>
+              <tr>
+                <th>Order Ref</th>
+                <th>Item & Details</th>
+                <th>Amount</th>
+                <th>Gate Status</th>
+                <th>Fulfillment</th>
+                <th>Dispute Status</th>
+              </tr>
+            </thead>
+            <tbody id="merchantOrdersTableBody">
+              <tr><td colspan="6" style="text-align: center; color: var(--text-dim);">No orders processed yet in this session.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 7: TimescaleDB Audit Trail & Immutable Ledger -->
+    <section id="audit-tab" class="tab-content">
+      <div class="card">
+        <!-- TimescaleDB Telemetry Bar -->
+        <div class="db-telemetry-banner" id="dbTelemetryBanner">
+          <div class="telemetry-item">
+            <span class="telemetry-label">Storage Engine</span>
+            <span class="telemetry-val" id="telemetryStorageType">TimescaleDB Hypertable</span>
+          </div>
+          <div class="telemetry-item">
+            <span class="telemetry-label">Partitioned Chunks</span>
+            <span class="telemetry-val" id="telemetryChunks">Active</span>
+          </div>
+          <div class="telemetry-item">
+            <span class="telemetry-label">Total Immutable Records</span>
+            <span class="telemetry-val" id="telemetryTotalRows">0</span>
+          </div>
+          <div class="telemetry-item">
+            <span class="telemetry-label">Latest Block Hash</span>
+            <span class="telemetry-val" id="telemetryLastHash" style="font-family: monospace; font-size: 0.75rem;">0000...</span>
+          </div>
+        </div>
+
+        <div class="card-header">
+          <div class="card-title">
+            <span>📜</span> TimescaleDB Append-Only Audit Ledger
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-secondary" onclick="verifyLedgerIntegrity()">🛡️ Verify Hash Chain</button>
+            <button class="btn btn-secondary" onclick="loadAuditTrail()">🔄 Refresh Logs</button>
+          </div>
+        </div>
+
+        <!-- Filter Controls -->
+        <div class="audit-controls">
+          <select id="auditEventFilter" class="form-input" style="max-width: 240px;" onchange="loadAuditTrail()">
+            <option value="all">All Event Types</option>
+            <option value="consent_granted">Consent Granted</option>
+            <option value="agent_proposed_order">Agent Proposed Order</option>
+            <option value="gate_approved">Gate Approved</option>
+            <option value="gate_blocked">Gate Blocked</option>
+            <option value="gate_flagged_anomaly">Kaggle Risk Anomaly</option>
+            <option value="payment_order_created">Razorpay Order Created</option>
+            <option value="payment_verified">Payment Verified</option>
+            <option value="fulfillment_failed">Fulfillment Failed</option>
+            <option value="dispute_auto_triggered">Dispute Auto-Triggered</option>
+          </select>
+        </div>
+
+        <!-- Audit Table with Hash Column -->
+        <div class="audit-table-wrapper">
+          <table class="audit-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Event Type</th>
+                <th>Session</th>
+                <th>Order Ref</th>
+                <th>Block Hash (SHA-256)</th>
+                <th>Explainable Detail</th>
+              </tr>
+            </thead>
+            <tbody id="auditTableBody">
+              <!-- Logs injected here -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Razorpay / Details Modal -->
+  <div class="app-modal-overlay" id="genericModal" onclick="if(event.target===this) closeModal()">
+    <div class="app-modal-card" id="genericModalCard">
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/firebase-config.js"></script>
+  <script src="/anomaly-visualizer.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

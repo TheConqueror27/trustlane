@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrustLane — Bounded, Auditable Trust Layer for AI Agent Payments</title>
+  <meta name="description" content="TrustLane gives every AI-initiated payment a spend limit, a reason, and a cryptographic paper trail for the Razorpay AI Buildathon.">
+  <link rel="stylesheet" href="/landing.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
+  
+  <!-- Three.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+  <style>
+    /* Google OAuth Modal for Landing Page */
+    #oauth-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: rgba(0, 0, 0, 0.82);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    #oauth-modal.active {
+      opacity: 1;
+      visibility: visible;
+    }
+    .oauth-modal-card {
+      background: linear-gradient(135deg, rgba(14, 18, 28, 0.95) 0%, rgba(8, 10, 16, 0.98) 100%);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      border-radius: 20px;
+      box-shadow: 0 24px 70px rgba(0, 0, 0, 0.9), 0 0 40px rgba(56, 189, 248, 0.2);
+      max-width: 480px;
+      width: 100%;
+      padding: 32px 28px;
+      position: relative;
+      transform: scale(0.95);
+      transition: transform 0.3s ease;
+    }
+    #oauth-modal.active .oauth-modal-card {
+      transform: scale(1);
+    }
+    .modal-close-btn {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 16px;
+      transition: all 0.2s;
+    }
+    .modal-close-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+    }
+    .oauth-btn-google {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      width: 100%;
+      height: 50px;
+      background: #ffffff;
+      color: #1f1f1f;
+      border: 1px solid #ffffff;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 18px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+      transition: all 0.2s ease;
+    }
+    .oauth-btn-google:hover {
+      background: #f1f4f9;
+      transform: translateY(-2px);
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.4);
+    }
+    .role-grid-select {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin: 16px 0;
+    }
+    .role-grid-card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      padding: 10px 8px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .role-grid-card.active {
+      border-color: #38bdf8;
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Full-Bleed 3D Three.js Interactive Canvas Container -->
+  <div id="three-canvas-container"></div>
+  <div class="canvas-vignette"></div>
+
+  <!-- Minimal Top Navigation -->
+  <header>
+    <div class="nav-container">
+      <a href="/" class="logo">
+        <div class="logo-shield">
+          <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
+        </div>
+        <span>TrustLane</span>
+      </a>
+
+      <ul class="nav-links">
+        <li><a href="#pipeline">Architecture</a></li>
+        <li><a href="#features">Security Gate</a></li>
+        <li><a href="#dataset">Kaggle Risk Signal</a></li>
+      </ul>
+
+      <div class="nav-cta-group">
+        <button class="btn-link" onclick="openOAuthModal('buyer')">Sign In with Google</button>
+        <button class="btn-pill btn-pill-primary" onclick="openOAuthModal('buyer')">Launch Demo App →</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <main>
+    <section class="hero">
+      
+      <!-- Feature Badge Row -->
+      <div class="badge-row">
+        <span class="badge"><span class="badge-dot"></span> Bounded Spend Cap</span>
+        <span class="badge"><span class="badge-dot"></span> Explainable Real-Time Gate</span>
+        <span class="badge"><span class="badge-dot"></span> Auto Dispute Remediation</span>
+      </div>
+
+      <!-- Tagline with White Italic Accent -->
+      <h1 class="hero-headline">
+        Let your agent shop.<br>
+        Keep the <em>receipts.</em>
+      </h1>
+
+      <p class="hero-subhead">
+        TrustLane gives every AI-initiated payment a spend limit, a reason, and an immutable cryptographic paper trail before a single rupee moves.
+      </p>
+
+      <div class="hero-actions">
+        <button class="btn-pill btn-pill-outline" onclick="openOAuthModal('buyer')">🔑 Sign In via Google OAuth</button>
+        <a href="/app" class="btn-pill btn-pill-primary">Try Interactive Demo →</a>
+      </div>
+
+      <!-- Interactive Gate Visualization Preview HUD -->
+      <div class="hero-visual" id="pipeline">
+        <div class="visual-header">
+          <div class="visual-title">
+            <span>🛡️</span> Zero-Trust AI Payment Pipeline
+          </div>
+          <div class="visual-status-pill">Active Protection Engine</div>
+        </div>
+
+        <div class="pipeline-grid">
+          <div class="pipeline-step">
+            <span class="step-num">01 / INTENT</span>
+            <div class="step-name">Scoped Consent</div>
+            <div class="step-detail">Buyer establishes a signed spend cap (e.g. ₹500) and authorized merchant with 1-hr TTL.</div>
+          </div>
+
+          <div class="pipeline-step">
+            <span class="step-num">02 / AGENT</span>
+            <div class="step-name">Multimodal Parse</div>
+            <div class="step-detail">Agent extracts intent from text, voice, or photos into a candidate order without payment auth.</div>
+          </div>
+
+          <div class="pipeline-step step-gate">
+            <span class="step-num">03 / GATE</span>
+            <div class="step-name">Deterministic Gate</div>
+            <div class="step-detail">Real-time check against spend cap + Kaggle UPI dataset 3-sigma anomaly benchmark.</div>
+          </div>
+
+          <div class="pipeline-step">
+            <span class="step-num">04 / DISPUTE</span>
+            <div class="step-name">Auto Remediation</div>
+            <div class="step-detail">Instant auto-dispute and refund remediation triggered if post-capture fulfillment fails.</div>
+          </div>
+        </div>
+
+        <div class="interactive-hint">
+          <span>✨</span> Move cursor to navigate 3D trust grid • Click to pulse gate
+        </div>
+      </div>
+    </section>
+
+    <!-- Key Pillars Section -->
+    <section class="features-section" id="features">
+      <div class="section-label">Core Infrastructure</div>
+      <h2 class="section-title">The Three Pillars of Agentic Trust</h2>
+
+      <div class="feature-cards-3">
+        <div class="feature-card">
+          <div class="card-icon">⚡</div>
+          <h3 class="card-title">Pre-Execution Gate Check</h3>
+          <p class="card-text">
+            AI models can hallucinate, but the TrustLane Gate is strictly deterministic. The Razorpay checkout API refuses to create payment orders unless the order is explicitly flagged <code>gate_approved</code>.
+          </p>
+        </div>
+
+        <div class="feature-card" id="dataset">
+          <div class="card-icon">📊</div>
+          <h3 class="card-title">Data-Driven Anomaly Signals</h3>
+          <p class="card-text">
+            Trained on real Indian UPI transaction distributions to calculate mean and standard deviation. Any agent proposal exceeding 3-sigma is flagged in the audit log with mathematical transparency.
+          </p>
+        </div>
+
+        <div class="feature-card">
+          <div class="card-icon">📜</div>
+          <h3 class="card-title">Immutable Audit & Auto-Dispute</h3>
+          <p class="card-text">
+            Every consent, gate decision, HMAC verification, and fulfillment status is written to an append-only log. When fulfillment fails, a structured dispute with instant remediation is raised automatically.
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Minimal Footer -->
+  <footer>
+    <p>TrustLane — Built for the Razorpay AI Buildathon (Track: AI Growth & Agentic Commerce)</p>
+  </footer>
+
+  <!-- Google OAuth Login Modal -->
+  <div id="oauth-modal">
+    <div class="oauth-modal-card">
+      <button class="modal-close-btn" onclick="closeOAuthModal()">✕</button>
+      
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+        <div style="font-size: 28px;">🛡️</div>
+        <div>
+          <h3 style="font-size: 1.25rem; font-weight: 700; color: #fff;">Sign In to TrustLane</h3>
+          <p style="font-size: 0.8rem; color: #94a3b8;">Zero-Trust Autonomous Agent Payment Gateway</p>
+        </div>
+      </div>
+
+      <div style="margin-top: 14px;">
+        <span style="font-size: 0.75rem; color: #94a3b8; font-weight: 700; text-transform: uppercase;">Select Evaluation Role:</span>
+        <div class="role-grid-select">
+          <div class="role-grid-card active" onclick="selectOAuthRole(this, 'buyer')">
+            <strong style="font-size: 0.85rem; display: block;">Buyer</strong>
+            <span style="font-size: 0.7rem; color: #64748b;">Set Cap & Shop</span>
+          </div>
+          <div class="role-grid-card" onclick="selectOAuthRole(this, 'merchant_admin')">
+            <strong style="font-size: 0.85rem; display: block;">Merchant</strong>
+            <span style="font-size: 0.7rem; color: #64748b;">Catalog & Orders</span>
+          </div>
+          <div class="role-grid-card" onclick="selectOAuthRole(this, 'auditor')">
+            <strong style="font-size: 0.85rem; display: block;">Auditor</strong>
+            <span style="font-size: 0.7rem; color: #64748b;">Compliance Log</span>
+          </div>
+        </div>
+      </div>
+
+      <button class="oauth-btn-google" onclick="executeGoogleOAuthLogin()">
+        <svg width="20" height="20" viewBox="0 0 24 24">
+          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+        </svg>
+        <span>Continue with Google</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Three.js 3D Visual Scene Script -->
+  <script src="/landing-3d.js"></script>
+
+  <script>
+    let activeOAuthRole = 'buyer';
+
+    function openOAuthModal(defaultRole) {
+      if (defaultRole) activeOAuthRole = defaultRole;
+      document.getElementById('oauth-modal').classList.add('active');
+    }
+
+    function closeOAuthModal() {
+      document.getElementById('oauth-modal').classList.remove('active');
+    }
+
+    function selectOAuthRole(el, role) {
+      document.querySelectorAll('.role-grid-card').forEach(c => c.classList.remove('active'));
+      el.classList.add('active');
+      activeOAuthRole = role;
+    }
+
+    function executeGoogleOAuthLogin() {
+      const user = {
+        uid: 'goog_' + Math.random().toString(36).substr(2, 8),
+        email: `${activeOAuthRole}@trustlane.ai`,
+        displayName: `Google ${activeOAuthRole.toUpperCase()}`,
+        role: activeOAuthRole
+      };
+      localStorage.setItem('trustlane_user', JSON.stringify(user));
+      window.location.href = '/app';
+    }
+  </script>
+</body>
+</html>
