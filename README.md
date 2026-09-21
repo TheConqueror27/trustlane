@@ -22,8 +22,8 @@ TrustLane is a **zero-trust payment middleware** that sits between an AI shoppin
 
 1. **Explicit, Cryptographically Signed Consent Mandates** — Dual-key HMAC-SHA256 signed mandates with spend caps, merchant binding, ephemeral nonces, and 1-hour TTL.
 2. **Real-Time Deterministic Gate & 3-Sigma Anomaly Engine** — Kaggle UPI/PaySim data-driven Gaussian anomaly detection with an interactive bell curve visualizer.
-3. **NPCI-Grade Zero-Trust Payment Security** — One-time cryptographic gate tickets, Ed25519 digital signatures, anti-replay defense, and velocity limiting.
-4. **TimescaleDB Append-Only Persistent Audit Ledger** — Immutable, SHA-256 block-chained time-series hypertables. Records can never be deleted or tampered with.
+3. **NPCI-Grade Zero-Trust Payment Security Layer** — One-time cryptographic gate tickets, Ed25519 digital signatures, anti-replay defense, velocity limiting, JWT-based Role Authentication (RBAC), and strict CORS/Rate-Limiting.
+4. **TimescaleDB Append-Only Persistent Audit Ledger** — Immutable, SHA-256 sequential hash-chained time-series hypertables. Records can never be deleted or tampered with.
 5. **Real-Time Dynamic Simulated Menu Engine** — Live Server-Sent Events (SSE) stream with kitchen rush surges, flash discounts, and stock countdowns.
 6. **Automatic Dispute & Remediation** — Triggered instantly upon merchant fulfillment failure post-capture.
 
@@ -44,15 +44,15 @@ TrustLane is a **zero-trust payment middleware** that sits between an AI shoppin
 │  │                    TrustLane Gate Checkpoint                   │  │
 │  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────────┐  │  │
 │  │  │ Consent     │  │ 3-Sigma      │  │ NPCI Security Layer  │  │  │
-│  │  │ Mandate     │  │ Anomaly      │  │ (Ed25519 + Gate      │  │  │
-│  │  │ (HMAC-SHA256│  │ Engine       │  │  Tickets + Velocity  │  │  │
-│  │  │  + nonce)   │  │ (Kaggle data)│  │  Limiter)            │  │  │
+│  │  │ Mandate     │  │ Anomaly      │  │ (Ed25519, JWT RBAC,  │  │  │
+│  │  │ (HMAC-SHA256│  │ Engine       │  │  Gate Tickets,       │  │  │
+│  │  │  + nonce)   │  │ (Kaggle data)│  │  Velocity Limiter)   │  │  │
 │  │  └─────────────┘  └──────────────┘  └──────────────────────┘  │  │
 │  └────────────────────────────┬──────────────────────────────────┘  │
 │                               │                                     │
 │  ┌────────────────────────────▼──────────────────────────────────┐  │
 │  │             TimescaleDB (PostgreSQL Hypertables)               │  │
-│  │         Append-Only Audit Ledger + SHA-256 Block Chaining      │  │
+│  │      Append-Only Audit Ledger + SHA-256 Sequential Hash Chain  │  │
 │  └────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -170,12 +170,18 @@ PGDATABASE=trustlane
 TRUSTLANE_SECRET=trustlane_sec_npci_grade_2026_x99
 GATE_TICKET_SECRET=gate_sig_secret_key_8832_trustlane
 
-# Razorpay (optional - demo keys are pre-configured)
+# Razorpay API Keys
 RAZORPAY_KEY_ID=rzp_test_your_key_here
 RAZORPAY_KEY_SECRET=your_secret_here
 
-# Anthropic Claude API (optional - for AI agent features)
-ANTHROPIC_API_KEY=sk-ant-your-key-here
+# Google Gemini API
+GEMINI_API_KEY=your_gemini_api_key
+
+# JWT Auth Secret
+JWT_SECRET=your_jwt_secret
+
+# Allowed CORS Origins
+TRUSTED_ORIGINS=http://localhost:3000
 ```
 
 > 💡 **Note:** If no database is configured, TrustLane automatically falls back to a resilient in-memory + JSON file store. All features work without a database.
@@ -220,11 +226,13 @@ npm start
 | Feature | Implementation |
 |---|---|
 | **Digital Signatures** | Ed25519 Asymmetric Key Cryptography (PKCS8/SPKI PEM) |
-| **Consent Mandates** | Dual-key HMAC-SHA256, session-bound, merchant-locked |
+| **Consent Mandates** | Dual-key HMAC-SHA256, session-bound, merchant-locked. Verified at Gate. |
 | **Gate Tickets** | One-time use, 5-min TTL, cryptographically signed |
 | **Anti-Replay** | Persistent nonce cache — used nonces permanently invalidated |
 | **Velocity Limiting** | Max **6 txns/min**, ₹**2,000** volume cap per session |
-| **Audit Ledger** | SHA-256 block chaining: `hash = SHA256(prev_hash + ts + payload + secret)` |
+| **Audit Ledger** | SHA-256 sequential hash chaining: `hash = SHA256(prev_hash + ts + payload + secret)` (Globally unique `crypto.randomUUID()` IDs) |
+| **Access Control** | Strict JWT-based RBAC (`buyer`, `merchant_admin`, `auditor`). No hardcoded fallback secrets. |
+| **Payment Integrity** | Real Razorpay SDK integration. No test-mode backdoors. Cryptographic HMAC-SHA256 verification via `crypto.timingSafeEqual()`. |
 
 ### Payment Flow
 
@@ -292,6 +300,15 @@ The menu engine (`menu-simulator.js`) streams live price and inventory updates v
 
 ---
 
+## 🤖 Agentic Features
+
+- **Multi-Item Combos & Negotiation:** Gemini 2.5 Flash agent plans purchases based on natural language queries, respecting live catalog data and constraints.
+- **Conversation Memory:** LRU-bounded session history (up to 10 turns per session, 1-hour TTL) allows the agent to understand context and follow-up requests (e.g., "make it cheaper", "add a drink to that").
+- **Multimodal Order Input:** Users can upload images of items to initiate an order. Gemini Vision analyzes the image and extracts the intended food item.
+- **Resilience:** Automatic retry with exponential backoff and model cascading (`gemini-2.5-flash` → `gemini-1.5-flash` → `gemini-1.5-flash-8b`) ensures high availability even during API overload.
+
+---
+
 ## 📡 API Reference
 
 ### Health
@@ -299,7 +316,11 @@ The menu engine (`menu-simulator.js`) streams live price and inventory updates v
 GET /health
 ```
 
-### Consent Mandates
+### Auth
+```http
+POST /api/auth/token
+Body: { sessionId, role, merchant, adminSecret }
+```
 ```http
 POST /api/intent
 Body: { sessionId, spendCap, merchant, currency }
@@ -311,6 +332,15 @@ GET /api/intent/:sessionId
 ```http
 POST /api/gate/check
 Body: { sessionId, amount, category, merchant }
+```
+
+### Agent
+```http
+POST /api/agent/query
+Body: { sessionId, message }
+
+POST /api/agent/query-multimodal
+Body: { sessionId, imageBase64, mimeType }
 ```
 
 ### Payments
@@ -436,7 +466,7 @@ Covers: consent mandate creation, gate enforcement, anomaly detection, velocity 
 | **Containerization** | Docker + Docker Compose v3.8 |
 | **Frontend** | Vanilla HTML/CSS/JS + Canvas API |
 | **3D Landing** | Three.js |
-| **AI Integration** | Anthropic Claude API (optional) |
+| **AI Integration** | Google Gemini API (2.5 Flash, 1.5 Flash, Vision) |
 | **Dataset** | Kaggle UPI Fraud + PaySim |
 
 ---
