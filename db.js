@@ -1,13 +1,12 @@
 /**
  * db.js
  * TimescaleDB & PostgreSQL Persistence Layer for TrustLane
- * Stores all audits, trials, transactions, and consent mandates permanently across restarts.
+ * (Refactored for Production - Removed JSON file dump, uses bounded cache & direct queries)
  */
 
 const { Pool } = require('pg');
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
+const { LRUCache } = require('lru-cache');
 
 // TimescaleDB configuration with fallback defaults
 const poolConfig = {
@@ -28,49 +27,12 @@ let isTimescaleActive = false;
 let lastGenesisHash = '0000000000000000000000000000000000000000000000000000000000000000';
 let lastBlockHash = lastGenesisHash;
 
-// Local JSON backup store directory for resilient offline dev fallback
-const DATA_DIR = path.join(__dirname, '.data');
-const BACKUP_FILE = path.join(DATA_DIR, 'persisted_db.json');
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-// In-memory cache synced with DB
+// In-memory cache for performance (prevents memory leaks)
 const memoryStore = {
-  auditLogs: [],
-  transactions: {},
-  intents: {},
-  catalog: []
+  transactions: new LRUCache({ max: 500 }),
+  intents: new LRUCache({ max: 500 })
 };
 
-// Load initial offline state if exists
-try {
-  if (fs.existsSync(BACKUP_FILE)) {
-    const saved = JSON.parse(fs.readFileSync(BACKUP_FILE, 'utf8'));
-    if (saved.auditLogs) memoryStore.auditLogs = saved.auditLogs;
-    if (saved.transactions) memoryStore.transactions = saved.transactions;
-    if (saved.intents) memoryStore.intents = saved.intents;
-    if (saved.catalog) memoryStore.catalog = saved.catalog;
-    if (memoryStore.auditLogs.length > 0) {
-      lastBlockHash = memoryStore.auditLogs[0].block_hash || memoryStore.auditLogs[0].blockHash || lastGenesisHash;
-    }
-  }
-} catch (e) {
-  console.warn('[DB] Could not load backup json:', e.message);
-}
-
-function persistToLocalDisk() {
-  try {
-    fs.writeFileSync(BACKUP_FILE, JSON.stringify(memoryStore, null, 2), 'utf8');
-  } catch (e) {
-    console.error('[DB] Disk persist error:', e.message);
-  }
-}
-
-/**
- * Initialize TimescaleDB connection and run migrations
- */
 async function initDB() {
   try {
     pool = new Pool(poolConfig);
@@ -78,17 +40,16 @@ async function initDB() {
     isConnected = true;
     console.log('✅ [TimescaleDB] Successfully connected to PostgreSQL/TimescaleDB on port', poolConfig.port);
 
-    // 1. Try enabling TimescaleDB extension
     try {
       await client.query('CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;');
       isTimescaleActive = true;
       console.log('⚡ [TimescaleDB] TimescaleDB extension enabled with Time-Series partitioning.');
     } catch (extErr) {
-      console.warn('ℹ️ [TimescaleDB] Standard PostgreSQL mode (TimescaleDB extension optional):', extErr.message);
+      console.warn('ℹ️ [TimescaleDB] Standard PostgreSQL mode:', extErr.message);
       isTimescaleActive = false;
     }
 
-    // 2. Migration: audit_logs table (Hypertable)
+    // Migrations
     await client.query(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id VARCHAR(64) NOT NULL,
@@ -106,19 +67,12 @@ async function initDB() {
       );
     `);
 
-    // Convert to hypertable if timescale is available
     if (isTimescaleActive) {
       try {
-        await client.query(`
-          SELECT create_hypertable('audit_logs', 'created_at', if_not_exists => TRUE);
-        `);
-        console.log('📊 [TimescaleDB] Hypertable created on audit_logs(created_at).');
-      } catch (htErr) {
-        // already hypertable or ignore
-      }
+        await client.query(`SELECT create_hypertable('audit_logs', 'created_at', if_not_exists => TRUE);`);
+      } catch (htErr) {}
     }
 
-    // 3. Migration: transactions table
     await client.query(`
       CREATE TABLE IF NOT EXISTS transactions (
         order_ref VARCHAR(64) PRIMARY KEY,
@@ -131,7 +85,7 @@ async function initDB() {
         input_mode VARCHAR(32) DEFAULT 'text',
         rzp_order_id VARCHAR(64),
         payment_id VARCHAR(64),
-        gate_ticket VARCHAR(256),
+        gate_ticket TEXT,
         anomaly_score NUMERIC(6,2),
         anomaly_flag JSONB,
         dispute JSONB,
@@ -140,7 +94,6 @@ async function initDB() {
       );
     `);
 
-    // 4. Migration: consent_mandates table
     await client.query(`
       CREATE TABLE IF NOT EXISTS consent_mandates (
         session_id VARCHAR(64) PRIMARY KEY,
@@ -148,13 +101,12 @@ async function initDB() {
         spent NUMERIC(10,2) DEFAULT 0,
         merchant VARCHAR(128) NOT NULL,
         nonce VARCHAR(64) NOT NULL,
-        mandate_signature VARCHAR(128) NOT NULL,
+        mandate_signature TEXT NOT NULL,
         expires_at TIMESTAMPTZ NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
 
-    // 5. Migration: menu_items table
     await client.query(`
       CREATE TABLE IF NOT EXISTS menu_items (
         id VARCHAR(64) PRIMARY KEY,
@@ -173,14 +125,11 @@ async function initDB() {
     `);
 
     client.release();
-
-    // 6. Sync memory records to DB and load existing DB rows into memory
     await loadInitialRecordsFromDB();
 
   } catch (err) {
     isConnected = false;
-    console.warn(`⚠️ [TimescaleDB] Could not connect to database (${err.message}). Running in Resilient Hybrid Mode with Local Persistent Storage.`);
-    // Reconnect scheduler in background
+    console.warn(`⚠️ [TimescaleDB] Could not connect to DB (${err.message}). Application will not function correctly without DB.`);
     setTimeout(reconnectDB, 5000);
   }
 }
@@ -192,90 +141,26 @@ async function reconnectDB() {
     const client = await pool.connect();
     client.release();
     isConnected = true;
-    console.log('🔄 [TimescaleDB] Reconnection successful! Running schema migration & syncing data...');
+    console.log('🔄 [TimescaleDB] Reconnection successful!');
     await initDB();
   } catch (err) {
     setTimeout(reconnectDB, 8000);
   }
 }
 
-/**
- * Syncs DB records into memory and syncs offline memory records to DB
- */
 async function loadInitialRecordsFromDB() {
   if (!isConnected || !pool) return;
   try {
-    // 1. Load audit logs
-    const auditRes = await pool.query(`SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 500`);
+    const auditRes = await pool.query(`SELECT block_hash FROM audit_logs ORDER BY created_at DESC LIMIT 1`);
     if (auditRes.rows.length > 0) {
-      memoryStore.auditLogs = auditRes.rows.map(r => ({
-        id: r.id,
-        ts: r.created_at.toISOString(),
-        type: r.event_type,
-        sessionId: r.session_id,
-        orderRef: r.order_ref,
-        detail: r.detail,
-        userRole: r.user_role,
-        prevHash: r.prev_hash,
-        blockHash: r.block_hash,
-        signature: r.signature,
-        extra: r.extra_metadata || {}
-      }));
       lastBlockHash = auditRes.rows[0].block_hash;
-      console.log(`📦 [TimescaleDB] Loaded ${auditRes.rows.length} immutable audit logs from database.`);
     }
-
-    // 2. Load transactions
-    const txnRes = await pool.query(`SELECT * FROM transactions ORDER BY created_at DESC LIMIT 200`);
-    for (const r of txnRes.rows) {
-      memoryStore.transactions[r.order_ref] = {
-        orderRef: r.order_ref,
-        sessionId: r.session_id,
-        item: {
-          id: r.product_id,
-          name: r.product_name,
-          category: r.category,
-          price: Number(r.amount)
-        },
-        amount: Number(r.amount),
-        status: r.status,
-        inputMode: r.input_mode,
-        rzpOrderId: r.rzp_order_id,
-        paymentId: r.payment_id,
-        gateTicket: r.gate_ticket,
-        anomalyScore: r.anomaly_score ? Number(r.anomaly_score) : null,
-        anomalyFlag: r.anomaly_flag,
-        dispute: r.dispute,
-        createdAt: r.created_at.toISOString(),
-        updatedAt: r.updated_at.toISOString()
-      };
-    }
-
-    // 3. Load consent intents
-    const consentRes = await pool.query(`SELECT * FROM consent_mandates WHERE expires_at > NOW()`);
-    for (const r of consentRes.rows) {
-      memoryStore.intents[r.session_id] = {
-        cap: Number(r.spend_cap),
-        spent: Number(r.spent),
-        merchant: r.merchant,
-        nonce: r.nonce,
-        signature: r.mandate_signature,
-        expiresAt: r.expires_at.toISOString(),
-        createdAt: r.created_at.toISOString()
-      };
-    }
-
-    persistToLocalDisk();
   } catch (err) {
     console.error('[DB] Error loading initial records:', err.message);
   }
 }
 
-/**
- * Save an immutable audit log entry into TimescaleDB with cryptographic hash chaining
- */
 async function saveAuditLog(entry) {
-  // Ensure hash chaining
   const prevHash = entry.prevHash || lastBlockHash;
   const canonicalPayload = JSON.stringify({
     id: entry.id,
@@ -288,16 +173,8 @@ async function saveAuditLog(entry) {
   const blockHash = entry.blockHash || crypto.createHash('sha256').update(`${prevHash}:${entry.ts}:${canonicalPayload}`).digest('hex');
   const signature = entry.signature || crypto.createHmac('sha256', process.env.TRUSTLANE_SECRET || 'trustlane_sec_2026').update(blockHash).digest('hex');
 
-  const normalized = {
-    ...entry,
-    prevHash,
-    blockHash,
-    signature
-  };
-
+  const normalized = { ...entry, prevHash, blockHash, signature };
   lastBlockHash = blockHash;
-  memoryStore.auditLogs.unshift(normalized);
-  persistToLocalDisk();
 
   if (isConnected && pool) {
     try {
@@ -323,17 +200,12 @@ async function saveAuditLog(entry) {
       console.error('[DB] TimescaleDB insert audit failed:', err.message);
     }
   }
-
   return normalized;
 }
 
-/**
- * Save or update a transaction
- */
 async function saveTransaction(order) {
-  memoryStore.transactions[order.orderRef] = order;
-  persistToLocalDisk();
-
+  memoryStore.transactions.set(order.orderRef, order);
+  
   if (isConnected && pool) {
     try {
       await pool.query(
@@ -372,13 +244,40 @@ async function saveTransaction(order) {
   }
 }
 
-/**
- * Save consent mandate
- */
-async function saveConsentMandate(mandate) {
-  memoryStore.intents[mandate.sessionId] = mandate;
-  persistToLocalDisk();
+async function getTransaction(orderRef) {
+  if (memoryStore.transactions.has(orderRef)) {
+    return memoryStore.transactions.get(orderRef);
+  }
+  if (isConnected && pool) {
+    const res = await pool.query('SELECT * FROM transactions WHERE order_ref = $1', [orderRef]);
+    if (res.rows.length > 0) {
+      const r = res.rows[0];
+      const order = {
+        orderRef: r.order_ref,
+        sessionId: r.session_id,
+        item: { id: r.product_id, name: r.product_name, category: r.category, price: Number(r.amount) },
+        amount: Number(r.amount),
+        status: r.status,
+        inputMode: r.input_mode,
+        rzpOrderId: r.rzp_order_id,
+        paymentId: r.payment_id,
+        gateTicket: r.gate_ticket,
+        anomalyScore: r.anomaly_score ? Number(r.anomaly_score) : null,
+        anomalyFlag: r.anomaly_flag,
+        dispute: r.dispute,
+        createdAt: r.created_at.toISOString(),
+        updatedAt: r.updated_at.toISOString()
+      };
+      memoryStore.transactions.set(orderRef, order);
+      return order;
+    }
+  }
+  return null;
+}
 
+async function saveConsentMandate(mandate) {
+  memoryStore.intents.set(mandate.sessionId, mandate);
+  
   if (isConnected && pool) {
     try {
       await pool.query(
@@ -408,51 +307,84 @@ async function saveConsentMandate(mandate) {
   }
 }
 
-/**
- * Get audit logs with optional filters
- */
-async function getAuditLogs(filter = {}) {
-  let logs = [...memoryStore.auditLogs];
-
-  if (filter.sessionId) {
-    logs = logs.filter(l => l.sessionId === filter.sessionId);
+async function getIntent(sessionId) {
+  if (memoryStore.intents.has(sessionId)) {
+    return memoryStore.intents.get(sessionId);
   }
-  if (filter.eventType && filter.eventType !== 'all') {
-    logs = logs.filter(l => l.type === filter.eventType);
+  if (isConnected && pool) {
+    const res = await pool.query('SELECT * FROM consent_mandates WHERE session_id = $1', [sessionId]);
+    if (res.rows.length > 0) {
+      const r = res.rows[0];
+      const mandate = {
+        sessionId: r.session_id,
+        cap: Number(r.spend_cap),
+        spent: Number(r.spent),
+        merchant: r.merchant,
+        nonce: r.nonce,
+        signature: r.mandate_signature,
+        expiresAt: r.expires_at.toISOString(),
+        createdAt: r.created_at.toISOString()
+      };
+      memoryStore.intents.set(sessionId, mandate);
+      return mandate;
+    }
   }
-
-  return logs;
+  return null;
 }
 
-/**
- * Get system and database health statistics
- */
-async function getDbStatus() {
-  let hypertableChunks = 0;
-  let totalDbAuditRows = memoryStore.auditLogs.length;
+async function getAuditLogs(filter = {}) {
+  if (!isConnected || !pool) return [];
+  let query = 'SELECT * FROM audit_logs';
+  const params = [];
+  const conditions = [];
 
+  if (filter.sessionId) {
+    params.push(filter.sessionId);
+    conditions.push(`session_id = $${params.length}`);
+  }
+  if (filter.eventType && filter.eventType !== 'all') {
+    params.push(filter.eventType);
+    conditions.push(`event_type = $${params.length}`);
+  }
+  if (filter.orderRef) {
+    params.push(filter.orderRef);
+    conditions.push(`order_ref = $${params.length}`);
+  }
+  
+  if (conditions.length > 0) {
+    query += ' WHERE ' + conditions.join(' AND ');
+  }
+  query += ' ORDER BY created_at DESC LIMIT 500';
+
+  const res = await pool.query(query, params);
+  return res.rows.map(r => ({
+    id: r.id,
+    ts: r.created_at.toISOString(),
+    type: r.event_type,
+    sessionId: r.session_id,
+    orderRef: r.order_ref,
+    detail: r.detail,
+    userRole: r.user_role,
+    prevHash: r.prev_hash,
+    blockHash: r.block_hash,
+    signature: r.signature,
+    extra: r.extra_metadata || {}
+  }));
+}
+
+async function getDbStatus() {
+  let totalDbAuditRows = 0;
   if (isConnected && pool) {
     try {
       const countRes = await pool.query('SELECT COUNT(*) as count FROM audit_logs');
       totalDbAuditRows = parseInt(countRes.rows[0].count, 10);
-
-      if (isTimescaleActive) {
-        const chunkRes = await pool.query("SELECT count(*) FROM timescaledb_information.chunks WHERE hypertable_name = 'audit_logs'");
-        hypertableChunks = parseInt(chunkRes.rows[0].count, 10);
-      }
-    } catch (e) {
-      // ignore
-    }
+    } catch (e) {}
   }
 
   return {
     connected: isConnected,
-    isTimescaleActive,
-    storageType: isConnected ? (isTimescaleActive ? 'TimescaleDB Hypertable (Time-Series)' : 'PostgreSQL Relational') : 'Hybrid Persistent File + In-Memory Ledger',
+    storageType: isConnected ? 'PostgreSQL' : 'None',
     totalAuditRecords: totalDbAuditRows,
-    totalTransactions: Object.keys(memoryStore.transactions).length,
-    activeMandates: Object.keys(memoryStore.intents).length,
-    hypertableChunks,
     lastBlockHash: lastBlockHash.substr(0, 16) + '...'
   };
 }
@@ -462,8 +394,10 @@ module.exports = {
   saveAuditLog,
   getAuditLogs,
   saveTransaction,
+  getTransaction,
   saveConsentMandate,
+  getIntent,
   getDbStatus,
-  memoryStore,
-  getLastBlockHash: () => lastBlockHash
+  getLastBlockHash: () => lastBlockHash,
+  getPool: () => pool
 };

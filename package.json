@@ -7,15 +7,24 @@
     "start": "node server.js",
     "dev": "node server.js"
   },
-  "keywords": ["agentic-commerce", "razorpay", "ai-payments", "trust-layer", "audit-trail"],
+  "keywords": [
+    "agentic-commerce",
+    "razorpay",
+    "ai-payments",
+    "trust-layer",
+    "audit-trail"
+  ],
   "author": "TrustLane Team",
   "license": "MIT",
   "dependencies": {
+    "@google/genai": "^2.23.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "express-rate-limit": "^8.7.0",
+    "jsonwebtoken": "^9.0.3",
+    "lru-cache": "^11.5.3",
     "pg": "^8.11.5",
-    "razorpay": "^2.9.4"
+    "razorpay": "^2.9.8"
   }
 }
-

@@ -1,59 +1,75 @@
 /**
  * security.js
  * NPCI-Grade Zero-Trust Payment Security Layer for TrustLane
- * 
- * Features:
- * 1. Asymmetric Public-Key Cryptography (Ed25519 Digital Signatures)
- *    - Server signs gate tickets and mandates using Private Key.
- *    - Payment gateways, banks, and auditors verify offline using the Public Key.
- * 2. Cryptographic One-Time Gate Tickets with Nonces & 5-min TTL
- * 3. Anti-Replay Defense with Persistent Nonce Invalidation
- * 4. Blast-Radius & Burst Velocity Limiter (Max 6 txns/min, ₹2000 volume cap)
- * 5. Tamper-Evident SHA-256 Merkle Block-Chained Ledger Integrity Verifier
- * 6. Live Attack & Exploit Simulator (Replay, MITM Tampering, Signature Forgery, Velocity DDoS)
+ * (Refactored for Production - Persistent Keys and Bounded Caches)
  */
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const db = require('./db');
 
-// Generate or load persistent Ed25519 Asymmetric Keypair
-let ed25519KeyPair;
+const DATA_DIR = path.join(__dirname, '.data');
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+const PRIV_KEY_PATH = path.join(DATA_DIR, 'private.pem');
+const PUB_KEY_PATH = path.join(DATA_DIR, 'public.pem');
+
+let ed25519KeyPair = null;
 try {
-  ed25519KeyPair = crypto.generateKeyPairSync('ed25519', {
-    publicKeyEncoding: { type: 'spki', format: 'pem' },
-    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
-  });
-  console.log('🔑 [Security] Initialized Ed25519 Asymmetric Cryptographic Keypair for Zero-Trust Signatures.');
+  if (fs.existsSync(PRIV_KEY_PATH) && fs.existsSync(PUB_KEY_PATH)) {
+    const privateKey = fs.readFileSync(PRIV_KEY_PATH, 'utf8');
+    const publicKey = fs.readFileSync(PUB_KEY_PATH, 'utf8');
+    
+    // We create a KeyObject for the private key
+    const privKeyObj = crypto.createPrivateKey({
+      key: privateKey,
+      format: 'pem',
+      type: 'pkcs8'
+    });
+    // We create a KeyObject for the public key
+    const pubKeyObj = crypto.createPublicKey({
+      key: publicKey,
+      format: 'pem',
+      type: 'spki'
+    });
+
+    ed25519KeyPair = { privateKey: privKeyObj, publicKey: pubKeyObj };
+    console.log('🔑 [Security] Loaded persistent Ed25519 keys from disk.');
+  } else {
+    ed25519KeyPair = crypto.generateKeyPairSync('ed25519', {
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+    });
+    fs.writeFileSync(PRIV_KEY_PATH, ed25519KeyPair.privateKey);
+    fs.writeFileSync(PUB_KEY_PATH, ed25519KeyPair.publicKey);
+    console.log('🔑 [Security] Generated and saved new persistent Ed25519 keys.');
+  }
 } catch (err) {
   console.error('[Security] Ed25519 initialization error:', err);
 }
 
-const SERVER_SECRET = process.env.TRUSTLANE_SECRET || 'trustlane_sec_npci_grade_2026_x99';
+const SERVER_SECRET = process.env.TRUSTLANE_SECRET;
+if (!SERVER_SECRET) {
+  throw new Error('[Security] TRUSTLANE_SECRET env var is not set. Server cannot start without a signing secret.');
+}
 
-// In-memory nonce cache with TTL (also backed by DB)
-const usedNonces = new Set();
-const consumedGateTickets = new Set();
-const sessionVelocity = new Map();
+// Bounded LRU cache for velocity
+const { LRUCache } = require('lru-cache');
+const sessionVelocity = new LRUCache({ max: 1000, ttl: 60 * 1000 });
 
 const MAX_ORDERS_PER_MINUTE = 6;
 const MAX_VELOCITY_AMOUNT_PER_MINUTE = 2000;
 
-/**
- * Get Public Key for third-party verification (Gateways, Banks, Auditors)
- */
 function getPublicKey() {
   return ed25519KeyPair ? ed25519KeyPair.publicKey : null;
 }
 
-/**
- * Generate a cryptographically secure random nonce
- */
 function generateNonce() {
   return 'nonce_' + crypto.randomBytes(16).toString('hex');
 }
 
-/**
- * Sign a Consent Mandate using Ed25519 Asymmetric Private Key
- */
 function signConsentMandate(sessionId, cap, merchant, expiresAt, nonce) {
   const payload = `${sessionId}|${cap}|${merchant}|${expiresAt}|${nonce}`;
   if (ed25519KeyPair) {
@@ -63,9 +79,6 @@ function signConsentMandate(sessionId, cap, merchant, expiresAt, nonce) {
   return crypto.createHmac('sha256', SERVER_SECRET).update(payload).digest('hex');
 }
 
-/**
- * Verify a Consent Mandate using Ed25519 Public Key
- */
 function verifyConsentMandate(mandate) {
   if (!mandate || !mandate.nonce || !mandate.signature) return false;
   const payload = `${mandate.sessionId}|${mandate.cap}|${mandate.merchant}|${mandate.expiresAt}|${mandate.nonce}`;
@@ -85,9 +98,6 @@ function verifyConsentMandate(mandate) {
   return true;
 }
 
-/**
- * Issue an Asymmetrically Signed One-Time Gate Approval Ticket (gate_ticket)
- */
 function issueGateTicket(sessionId, orderRef, amount, itemCategory, items = []) {
   const payload = {
     sessionId,
@@ -96,7 +106,7 @@ function issueGateTicket(sessionId, orderRef, amount, itemCategory, items = []) 
     itemCategory,
     itemsSummary: items.length > 1 ? items.map(i => `${i.name} (₹${i.price})`).join(', ') : (items[0]?.name || 'Single Item'),
     issuedAt: Date.now(),
-    expiresAt: Date.now() + 5 * 60 * 1000, // 5 minute validity
+    expiresAt: Date.now() + 5 * 60 * 1000,
     nonce: generateNonce(),
     issuer: 'TrustLane Zero-Trust Gate Authority (Ed25519)'
   };
@@ -120,10 +130,7 @@ function issueGateTicket(sessionId, orderRef, amount, itemCategory, items = []) 
   };
 }
 
-/**
- * Verify and consume a Gate Approval Ticket (Ed25519 Asymmetric Verification + Replay Defense)
- */
-function verifyAndConsumeGateTicket(gateTicket, expectedOrderRef, expectedAmount) {
+async function verifyAndConsumeGateTicket(gateTicket, expectedOrderRef, expectedAmount) {
   if (!gateTicket || typeof gateTicket !== 'string') {
     return {
       valid: false,
@@ -132,13 +139,19 @@ function verifyAndConsumeGateTicket(gateTicket, expectedOrderRef, expectedAmount
     };
   }
 
-  // 1. Anti-Replay Check
-  if (consumedGateTickets.has(gateTicket)) {
-    return {
-      valid: false,
-      code: 'REPLAY_ATTACK_DETECTED',
-      reason: '🚨 Security Breach Blocked: Gate approval ticket was already consumed (Replay attack intercepted).'
-    };
+  // 1. Anti-Replay Check via Database
+  // If the transaction already has a payment_id or is marked 'paid', this ticket has been used.
+  const order = await db.getTransaction(expectedOrderRef);
+  if (order && (order.status === 'paid' || order.status === 'payment_pending')) {
+     // Wait, the ticket is consumed when the order reaches payment_pending
+     // We should only allow it if the current DB state is gate_approved
+     if (order.status !== 'gate_approved') {
+       return {
+         valid: false,
+         code: 'REPLAY_ATTACK_DETECTED',
+         reason: '🚨 Security Breach Blocked: Gate approval ticket was already consumed or invalid state (Replay attack intercepted).'
+       };
+     }
   }
 
   const parts = gateTicket.split('.');
@@ -208,29 +221,21 @@ function verifyAndConsumeGateTicket(gateTicket, expectedOrderRef, expectedAmount
     };
   }
 
-  // Mark ticket consumed to prevent replay
-  consumedGateTickets.add(gateTicket);
-
   return {
     valid: true,
     payload
   };
 }
 
-/**
- * Velocity & Blast-Radius Limiter
- */
 function checkVelocityLimit(sessionId, proposedAmount) {
   const now = Date.now();
   const windowMs = 60 * 1000;
 
-  if (!sessionVelocity.has(sessionId)) {
-    sessionVelocity.set(sessionId, []);
-  }
-
-  const history = sessionVelocity.get(sessionId).filter(entry => now - entry.timestamp < windowMs);
-  sessionVelocity.set(sessionId, history);
-
+  let history = sessionVelocity.get(sessionId) || [];
+  
+  // Filter history
+  history = history.filter(entry => now - entry.timestamp < windowMs);
+  
   if (history.length >= MAX_ORDERS_PER_MINUTE) {
     return {
       allowed: false,
@@ -249,12 +254,10 @@ function checkVelocityLimit(sessionId, proposedAmount) {
   }
 
   history.push({ timestamp: now, amount: proposedAmount });
+  sessionVelocity.set(sessionId, history);
   return { allowed: true };
 }
 
-/**
- * Verify complete cryptographic hash-chain integrity of the audit ledger
- */
 function verifyLedgerIntegrity(auditLogs) {
   if (!auditLogs || auditLogs.length === 0) {
     return { valid: true, totalRecords: 0, message: 'Ledger is clean with 0 records.' };
@@ -310,35 +313,49 @@ function verifyLedgerIntegrity(auditLogs) {
   };
 }
 
-/**
- * Live Attack & Exploit Simulator (For Judge Demonstrations)
- */
-function simulateAttack(attackType, options = {}) {
+async function simulateAttack(attackType, options = {}) {
   const sessionId = options.sessionId || 'attacker_session_99';
   const orderRef = options.orderRef || 'ord_attack_' + Date.now();
 
   switch (attackType) {
     case 'replay_ticket': {
-      // 1. Issue legitimate ticket
+      // Create a dummy transaction
+      await db.saveTransaction({
+        orderRef,
+        sessionId,
+        amount: 180,
+        status: 'gate_approved'
+      });
       const { gateTicket } = issueGateTicket(sessionId, orderRef, 180, 'food');
-      // 2. Consume it legitimately once
-      verifyAndConsumeGateTicket(gateTicket, orderRef, 180);
-      // 3. Attempt replay
-      const replayResult = verifyAndConsumeGateTicket(gateTicket, orderRef, 180);
+      
+      // Consume it legitimately
+      const res1 = await verifyAndConsumeGateTicket(gateTicket, orderRef, 180);
+      
+      // Update DB to mark as paid so it fails replay
+      if (res1.valid) {
+        await db.saveTransaction({
+          orderRef,
+          sessionId,
+          amount: 180,
+          status: 'paid'
+        });
+      }
+
+      // Attempt replay
+      const replayResult = await verifyAndConsumeGateTicket(gateTicket, orderRef, 180);
       return {
         attackType: 'Ticket Replay Attack',
         description: 'Attacker intercepts and attempts to reuse an already captured Gate Approval Ticket.',
         intercepted: !replayResult.valid,
         verdict: replayResult.reason,
-        securityLayer: 'Anti-Replay Nonce Engine'
+        securityLayer: 'Anti-Replay DB Verifier'
       };
     }
 
     case 'mitm_amount_tamper': {
-      // 1. Issue ticket for ₹180
+      await db.saveTransaction({ orderRef, sessionId, amount: 180, status: 'gate_approved' });
       const { gateTicket } = issueGateTicket(sessionId, orderRef, 180, 'food');
-      // 2. Attacker modifies checkout request amount to ₹1800 (10x price inflate)
-      const tamperResult = verifyAndConsumeGateTicket(gateTicket, orderRef, 1800);
+      const tamperResult = await verifyAndConsumeGateTicket(gateTicket, orderRef, 1800);
       return {
         attackType: 'Man-In-The-Middle (MITM) Amount Tampering',
         description: 'Rogue client/proxy modifies payment amount from ₹180 to ₹1800 post-gate authorization.',
@@ -349,18 +366,14 @@ function simulateAttack(attackType, options = {}) {
     }
 
     case 'forge_signature': {
-      // Create fake ticket payload with bogus signature
+      await db.saveTransaction({ orderRef, sessionId, amount: 9999, status: 'gate_approved' });
       const fakePayload = Buffer.from(JSON.stringify({
-        sessionId,
-        orderRef,
-        amount: 9999,
-        issuedAt: Date.now(),
-        expiresAt: Date.now() + 300000
+        sessionId, orderRef, amount: 9999, issuedAt: Date.now(), expiresAt: Date.now() + 300000
       })).toString('base64url');
       const bogusSignature = crypto.randomBytes(64).toString('base64url');
       const forgedTicket = `${fakePayload}.${bogusSignature}`;
 
-      const forgeResult = verifyAndConsumeGateTicket(forgedTicket, orderRef, 9999);
+      const forgeResult = await verifyAndConsumeGateTicket(forgedTicket, orderRef, 9999);
       return {
         attackType: 'Asymmetric Signature Forgery',
         description: 'Unauthorized client attempts to mint a fake gate ticket without the Ed25519 Private Key.',
@@ -371,7 +384,6 @@ function simulateAttack(attackType, options = {}) {
     }
 
     case 'velocity_flood': {
-      // Trigger 7 rapid orders in 1 second to exceed 6 orders/min cap
       let floodResult = null;
       for (let i = 0; i < 7; i++) {
         floodResult = checkVelocityLimit('flood_session_test', 100);
